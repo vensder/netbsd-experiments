@@ -31,7 +31,7 @@ wine: could not load ntdll.so: (null)
 This happened with PaX MPROTECT correctly disabled, valid ELF binaries,
 and no missing library dependencies (`ldd` clean, `dmesg` clean). It
 appears to be a real regression or packaging issue specific to that
-build on NetBSD. Wine 5.0.5 (`wine-5.0.5nb3`) loads and runs cleanly on
+build on NetBSD. Wine 5.0.5 (`wine-5.0.5nb4`) loads and runs cleanly on
 the same system. If a newer working version becomes available later,
 test it in a scratch sandbox before relying on it.
 
@@ -151,21 +151,17 @@ pkgin search wine
 ```
 
 You will typically see both a current version (e.g. `wine-9.0nbN`,
-marked `=`) and an older one (e.g. `wine-5.0.5nb3`, marked `>` meaning
-"available but not the newest"). Install the older one explicitly with
-`pkg_add`, since `pkgin` always prefers the newest:
+marked `=`) and an older one (e.g. `wine-5.0.5nb4`, marked `>` meaning
+"available but not the newest"). `pkgin install wine` always grabs the
+newest, so install the older one by giving its exact versioned name
+instead:
 
 ```sh
-pkg_add -r wine-5.0.5nb3
+pkgin install wine-5.0.5nb4
 ```
 
-If `pkg_add -r` cannot resolve it, find your configured package
-repository and fetch it directly:
-
-```sh
-cat /usr/pkg/etc/pkgin/repositories.conf
-pkg_add http://<repo-url-from-above>/All/wine-5.0.5nb3.tgz
-```
+(match the exact nbN suffix shown by `pkgin search wine` on your
+system — it may differ from nb4)
 
 ### 2.4 (If you installed 9.0 first) remove it before installing 5.0.5
 

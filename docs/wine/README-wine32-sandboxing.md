@@ -197,13 +197,25 @@ The sandbox is a separate filesystem root with its own `/tmp`, so it
 needs its own path to your X server's socket and its own copy of your
 X authentication cookie.
 
-### 3.1 Bridge the X11 socket (one-time, survives reboots if `/tmp` is not cleared by your setup — otherwise repeat after reboot)
+### 3.1 Bridge the X11 socket (must be redone every reboot)
+
+X recreates `/tmp/.X11-unix/X0` as a brand-new file each time the X
+server starts, which means a hardlink made into the sandbox in a
+previous session points at a now-dead, orphaned inode after reboot —
+even though the path looks the same. This step is **not** one-time,
+despite how it looks; it must be redone every reboot, same as the auth
+cookie in 3.2. It is handled by the helper script in Part 4.
+
+Manually, the steps are:
 
 ```sh
 sudo mkdir -m 777 -p /var/chroot/wine-i386/tmp/.X11-unix
 sudo ln -f /tmp/.X11-unix/X0 /var/chroot/wine-i386/tmp/.X11-unix/X0
 sudo chmod 777 /var/chroot/wine-i386/tmp/.X11-unix/X0
 ```
+
+Symptom if this is stale: `xeyes` or `wine` hangs or fails to connect
+inside the sandbox, while X11 apps work fine on the host.
 
 ### 3.2 X11 auth cookie (must be refreshed each login session)
 
@@ -275,6 +287,8 @@ sudo chown 1000:100 /var/chroot/wine-i386/home/wine/some-installer.exe
 | `xauth: file /tmp/.Xauthority does not exist` | Ran `xauth extract` as root, which has no X auth of its own | Run it as your normal logged-in user instead |
 | `Authorization required, but no authorization protocol specified` / `xeyes` fails in sandbox | Auth cookie missing, stale, or wrong ownership | Redo the cookie extract/copy/chown steps in Part 3.2 |
 | `err:winediag:nodrv_CreateWindow ... no driver could be loaded` | `$DISPLAY` not set in the current shell (commonly after `su -l`, which does not inherit env vars) | `export DISPLAY=:0`, or rely on the `.profile` fix from step 2.5 |
+| `xeyes`/`wine` hangs or fails in the sandbox after a reboot, even though X11 apps work fine on the host, and even after refreshing the auth cookie | Stale X11 socket hardlink — X recreates `/tmp/.X11-unix/X0` as a new file every restart, orphaning the sandbox's old link | Redo step 3.1 (`ln -f` the socket again); `wine32-sandbox.sh` does this automatically on every run |
+| `DISPLAY` shows as `:0.0` instead of `:0` | Normal — `:0.0` is `display.screen`, functionally identical to `:0`. Comes from how `xinit`/SLiM exports the variable at session start | Not an actual problem; no action needed |
 | `sandboxctl: cannot create .sandbox_lock: permission denied` | Sandbox operations need root | Prefix with `sudo`/`doas` |
 | `pkgin: nothing to do` for `xauth` | `xauth` is not a pkgsrc package on NetBSD | It's part of base X11 at `/usr/X11R7/bin/xauth` |
 

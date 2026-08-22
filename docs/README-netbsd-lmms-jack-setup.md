@@ -1,0 +1,259 @@
+# LMMS + JACK on NetBSD (ThinkPad T440s) — Setup Notes
+
+Tested on: NetBSD 10.1 (amd64), pkgsrc `2026Q2` binary packages.
+Should also apply to NetBSD 11.0 with the same pkgsrc tag, but audio
+group/device naming should be reconfirmed per-system.
+
+## 1. Prerequisites
+
+```sh
+sudo pkgin install jack qjackctl jack-keyboard
+```
+
+Confirm the JACK "sun" backend module is present:
+
+```sh
+find /usr/pkg -iname "*jack_sun*"
+# expect: /usr/pkg/lib/jack/jack_sun.so
+```
+
+Confirm your audio device and that it plays back correctly outside JACK
+first (sanity check before touching JACK at all):
+
+```sh
+audiocfg list
+# confirms which /dev/audioN is the active default (e.g. audio1 = Realtek codec)
+```
+
+## 2. Realtime scheduling (`login.conf`)
+
+By default `/etc/login.conf` on a fresh NetBSD install may have the
+`default:` class entirely commented out, meaning no `rtprio` (realtime
+priority) capability is granted to normal users at all. This causes:
+
+- `jackd -R` (realtime mode) to fail with `Cannot use real-time
+  scheduling (RR/10) (1: Operation not permitted)`
+- LMMS to print `Notice: could not set realtime priority.` on every
+  launch
+
+**Fix:** uncomment/add the `default:` class in `/etc/login.conf` with a
+bounded `rtprio`:
+
+```
+default:\
+        :path=/usr/bin /bin /usr/sbin /sbin /usr/X11R7/bin /usr/pkg/bin /usr/pkg/sbin /usr/local/bin:\
+        :umask=022:\
+        :datasize-max=512M:\
+        :datasize-cur=512M:\
+        :maxproc-max=1024:\
+        :maxproc-cur=512:\
+        :openfiles-cur=128:\
+        :stacksize-cur=4M:\
+        :rtprio=95:\
+        :copyright=/dev/null:
+```
+
+Notes:
+- Use a bounded value like `95`, not `inf` — an unbounded realtime
+  ceiling let a stuck JACK thread starve X11/window-manager rendering
+  during troubleshooting (symptom: LMMS splash screen and qjackctl
+  window froze/rendered as a black rectangle).
+- `maxproc-cur` was also bumped from the stock `160` to `512` — a full
+  LXQt + JACK + LMMS session can exceed the low stock default.
+
+Apply and re-login (new login session required, not just a new shell):
+
+```sh
+sudo cap_mkdb /etc/login.conf
+# log out of the X session fully, log back in
+```
+
+**In practice, `jackd -R` (true realtime mode) was never gotten fully
+stable on this system** even after the `rtprio` fix — it's possible a
+further NetBSD `kauth` privilege is also required beyond the
+`login.conf` rlimit. **Non-realtime mode (`-r`) with a modest period
+size has proven stable and is the documented/supported NetBSD
+approach** (see `MESSAGE.NetBSD` from the `audio/jack` pkgsrc package).
+Realtime mode is not required for normal LMMS use at the latencies
+tested here.
+
+## 3. Working JACK invocation
+
+```sh
+jackd -v -Sr -d sun -p 512 -r 44100 -w 32
+```
+
+Flags:
+| Flag | Meaning |
+|------|---------|
+| `-v` | verbose output |
+| `-S` | synchronous mode (**required** on the `sun` backend — omitting it fails with `Cannot run in asynchronous mode`) |
+| `-r` | **no-realtime** (note: at the top level `-r` = non-realtime; this is the opposite of the `sun` backend's own `-r`/`--rate`, which only applies *after* `-d sun`) |
+| `-d sun` | use the native NetBSD `sun` audio driver backend |
+| `-p 512` | period size, frames per process() call (must be power of 2) |
+| `-r 44100` | (sun-backend flag) sample rate |
+| `-w 32` | (sun-backend flag) word length / sample bit depth |
+
+This configuration ran with **low CPU usage** on the T440s with LMMS,
+`jack-keyboard`, and `amsynth` all connected simultaneously.
+
+Lower period sizes (`-p 256`, `-p 128`) can be tried for lower latency;
+back off one step as soon as xruns appear in `jackd`'s own terminal
+output. `-p 512 -r 44100` was the confirmed-stable baseline.
+
+If you see this once per new client connecting — it's benign, observed
+consistently across working sessions, does not indicate failure:
+```
+Cannot read socket fd = N err = Undefined error: 0
+```
+
+## 4. Startup order
+
+Start each piece **one at a time**, confirming it's stable before
+starting the next — this avoids the cascade failures seen when
+multiple clients register against a not-yet-settled server.
+
+```sh
+# 1. Start the JACK server, alone. Let it sit ~10s with no errors.
+jackd -v -Sr -d sun -p 512 -r 44100 -w 32
+
+# 2. (separate terminal) MIDI clients
+jack-keyboard &
+
+# 3. Synth/instrument clients
+amsynth &          # example — near-zero latency observed here
+
+# 4. LMMS last
+lmms &
+```
+
+Then, in LMMS: **Edit → Settings → Audio → JACK**, restart LMMS if
+prompted.
+
+Connect MIDI: in `jack-keyboard`'s own connection UI (or via LMMS's
+vkeyboard interface), connect to `lmms:MIDI in`.
+
+**Do not start playback/transport until all clients show as connected**
+in the graph — starting transport mid-registration is what triggered
+`ProcessGraphSync`/`SuspendRefNum` cascades during testing.
+
+## 5. Known issue: LMMS latency vs. amsynth
+
+With identical JACK server settings, `amsynth` showed **near-zero**
+input-to-sound delay, while **LMMS showed a noticeable delay**. This
+points to LMMS's own internal audio buffer, not the JACK server
+period, as the source of the extra latency.
+
+**To reduce:** in LMMS, **Edit → Settings → Audio → "Frames per audio
+buffer"** — lower this to match (or be a small multiple of) the JACK
+period size (e.g. `256` or `512`), rather than the LMMS default of
+`1024`. Keep LMMS's project sample rate matched to JACK's `-r` value
+(`44100` here) to avoid resampling overhead.
+
+## 6. Known issue: qjackctl
+
+`qjackctl` was observed to hang on startup with a black/unresponsive
+window, with `gdb` confirming its main thread stuck inside
+`jack_client_open()` waiting on a `read()` from the JACK server socket
+— the same stall pattern LMMS hit once, independently, earlier in
+troubleshooting. It has since started and worked in some sessions but
+is **not reliable** — treat as suspect, not a required tool.
+
+**Fallback if qjackctl misbehaves:** use the JACK CLI tools instead of
+the GUI patchbay:
+
+```sh
+jack_lsp              # list all ports
+jack_connect  <src> <dst>
+jack_disconnect <src> <dst>
+```
+
+(confirm exact binary names/paths with `pkg_info -qL jack | grep bin/`)
+
+If debugging a qjackctl hang again:
+
+```sh
+qjackctl &
+sleep 3
+gdb -p $(pgrep qjackctl)
+(gdb) info threads
+# find the thread whose LWP == qjackctl's own PID (ps aux | grep qjackctl)
+(gdb) thread <N>
+(gdb) bt
+```
+
+## 7. Unrelated but critical fix: LMMS segfault on startup (Qt5/KF5 conflict)
+
+Not JACK-related, but required before any of the above worked at all.
+
+**Symptom:** LMMS segfaults immediately on launch, backtrace shows
+crash inside `QCoreApplicationPrivate::sendThroughApplicationEventFilters`
+→ `QWidget::setParent` → `MainWindow::MainWindow()`.
+
+**Cause:** a stray Qt5-linked KDE Frameworks 5 (`KF5`) package chain
+was installed alongside the Qt6 `kf6-*` stack actually used by a
+Qt6-based LXQt session. LMMS (Qt5) ends up dynamically loading the
+broken/ABI-mismatched Qt5 `KF5WidgetsAddons` at runtime (confirmed via
+`QT_DEBUG_PLUGINS=1 lmms`), corrupting a Qt application-level event
+filter object and crashing on first widget creation.
+
+**Fix:**
+
+```sh
+pkg_info -R kwidgetsaddons-5.116.0nb8   # walk the dependency chain first
+sudo pkgin remove kwidgetsaddons kconfigwidgets kiconthemes qqc2-desktop-style
+```
+
+**How to detect this on a fresh system:** if your LXQt/desktop is
+Qt6-based (`ldd $(which lxqt-session) | grep -i qt` shows only `Qt6*`),
+any installed Qt5 `kwidgetsaddons-5.*`/`kconfigwidgets-5.*`/etc.
+package is very likely an orphaned leftover (e.g. pulled in by trying
+a KDE-style theme via the LXQt appearance configurator) and should be
+removed:
+
+```sh
+pkg_info -a | grep -iE "^kf5|^k[a-z]+-5\.[0-9]"
+```
+
+## 8. LMMS build options
+
+```sh
+cd /usr/pkgsrc/audio/lmms
+make show-options
+```
+
+Recommended for NetBSD minimal setups:
+
+```
+PKG_OPTIONS.lmms=jack
+```
+
+- `jack` — pro-audio routing, recommended, used throughout this guide.
+- OSS support is compiled in **unconditionally** (not gated by a
+  package option) — always available as a fallback via LMMS's own
+  Settings → Audio → OSS, device `/dev/audio`. Confirmed stable.
+- **Not recommended:** `alsa`, `portaudio`, `pulseaudio`, `sdl` — none
+  are native NetBSD audio APIs; they're portability/compat shims that
+  add package weight and dependency-chain risk for no real benefit
+  over JACK or native OSS.
+
+## 9. General debugging notes for this hardware/OS combo
+
+- Prefer `pkgin` over raw `pkg_add`/`pkg_delete` for dependency-aware
+  installs/removals; `pkgin -f update` resyncs its local DB if it
+  drifts from `pkg_info`'s view.
+- `QT_DEBUG_PLUGINS=1 <app>` is the fastest way to see what shared
+  libraries a Qt app loads at runtime — more useful than `gdb` when
+  binaries are stripped (no debug symbols), which pkgsrc binary
+  packages are by default.
+- For a hung (not crashed) GUI process: `gdb -p $(pgrep <name>)`, then
+  `info threads` to find the main thread (its LWP == the process's own
+  PID from `ps aux`), `thread <N>`, `bt`.
+- Diff against a known-working reference install (e.g. a different
+  NetBSD version/partition on the same hardware) was the single most
+  effective troubleshooting technique used in this session — package
+  list diffs surfaced the root cause of the Qt5/KF5 crash directly.
+- `osabi-NetBSD-X.Y` dummy packages enforce an exact `uname -r` match
+  for kernel-ABI-sensitive packages; a transient CDN package-version
+  mismatch can cause a spurious install failure — usually resolves
+  itself on the next `pkgin update`.

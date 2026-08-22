@@ -159,16 +159,15 @@ window, with `gdb` confirming its main thread stuck inside
 troubleshooting. It has since started and worked in some sessions but
 is **not reliable** — treat as suspect, not a required tool.
 
-**Fallback if qjackctl misbehaves:** use the JACK CLI tools instead of
-the GUI patchbay:
-
-```sh
-jack_lsp              # list all ports
-jack_connect  <src> <dst>
-jack_disconnect <src> <dst>
-```
-
-(confirm exact binary names/paths with `pkg_info -qL jack | grep bin/`)
+**Note:** the `jack-1.9.22` pkgsrc package on this system ships
+**server-only** — `pkg_info -qL jack | grep bin/` returns only
+`/usr/pkg/bin/jackd`. There is no `jack_lsp`, `jack_connect`, or
+`jack_disconnect` available, and no separate `jack-tools` package
+exists in this pkgsrc tree either. Practical consequence: manual
+port patching has to go through an application's own connection UI
+(qjackctl's Connect window, jack-keyboard's own dropdown) or through
+a client's auto-connect properties (see §10, GStreamer's
+`port-pattern`) — there is no CLI fallback for this on this system.
 
 If debugging a qjackctl hang again:
 
@@ -237,7 +236,70 @@ PKG_OPTIONS.lmms=jack
   add package weight and dependency-chain risk for no real benefit
   over JACK or native OSS.
 
-## 9. General debugging notes for this hardware/OS combo
+## 10. Recording JACK audio to a WAV file
+
+`audiorecord`/`mixerctl` **do not work for this** — they operate at
+the OSS/hardware level (`/dev/audio`), which only sees physical
+capture input. A JACK client's output (e.g. `amsynth`) never touches
+that path, so recordings come out silent.
+
+Tools checked and **not usable** on this system:
+- `jack_capture` — not in pkgsrc at all.
+- `sox` / `sox_ng` / `audacity` — installed, but none are linked
+  against `libjack` (confirmed via `ldd $(which <tool>) | grep -i
+  jack` returning nothing), so none can open a JACK input regardless
+  of in-app preferences settings.
+- `ecasound` — not checked/available in this session; worth trying if
+  GStreamer ever becomes unavailable.
+
+**Working method: GStreamer + `gst-plugins1-jack`.**
+
+```sh
+sudo pkgin install gstreamer1 gst-plugins1-jack
+```
+
+(`gst-launch-1.0` and `gst-inspect-1.0` ship inside the core
+`gstreamer1` package itself on this pkgsrc tree, not a separate
+`-tools` package.)
+
+Verify the JACK plugin registered:
+
+```sh
+gst-inspect-1.0 jackaudiosrc
+```
+
+**Record**, with `jackd` and the source client (e.g. `amsynth`)
+already running and connected to the server:
+
+```sh
+gst-launch-1.0 jackaudiosrc connect=auto-forced port-pattern=amsynth \
+  ! audioconvert ! wavenc ! filesink location=/home/vensder/Music/rec.wav
+```
+
+- `connect=auto-forced` + `port-pattern=<name>` auto-connects to any
+  JACK output port whose name matches `<name>` — this is the
+  workaround for not having `jack_connect` available. Substitute the
+  pattern for whatever client you're recording from.
+- `connect=explicit` requires the `port-names` property with **exact**
+  port names (e.g. `amsynth:out_1,amsynth:out_2`) — fails with `User
+  must provide valid port names` if you pass a plain pattern instead;
+  use `auto-forced` unless you already know the exact port names.
+- Play/trigger the source, then **`Ctrl+C` once** to stop — this
+  sends the pipeline through a clean `PLAYING → NULL` shutdown so
+  `wavenc` finalizes the WAV header correctly. Confirmed working: a
+  14-second capture produced a valid, non-silent file.
+- **Do not follow `Ctrl+C` with `Ctrl+Z`** — that only suspends
+  (backgrounds) an already-exited process's shell job entry; if the
+  pipeline is still shown as a stopped job afterward, clean it up with
+  `kill -9 %<job-number>`.
+
+Check the result:
+
+```sh
+ls -la /home/vensder/Music/rec.wav
+```
+
+## 11. General debugging notes for this hardware/OS combo
 
 - Prefer `pkgin` over raw `pkg_add`/`pkg_delete` for dependency-aware
   installs/removals; `pkgin -f update` resyncs its local DB if it

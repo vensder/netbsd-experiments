@@ -299,6 +299,20 @@ Check the result:
 ls -la /home/vensder/Music/rec.wav
 ```
 
+**Playback / verification:**
+
+- `cplay <file>.wav` — confirmed reliable, no extra packages needed.
+  Simplest way to verify a recording.
+- `gst123 <file>.wav` — needs `gst-plugins1-oss` installed
+  (`sudo pkgin install gst-plugins1-oss`) or it silently plays with
+  **no sound and no error message** — it still shows a progress timer
+  and "Playing..." status even with a nonfunctional/fallback sink, so
+  a silent `gst123` playback does not by itself mean the file is bad.
+  Verify with `cplay` first before assuming a recording failed.
+  Once the plugin is installed, plain `gst123 -a oss <file>.wav`
+  works; the `-a oss=/dev/audio1` device-suffix form was not needed
+  in testing.
+
 ## 11. General debugging notes for this hardware/OS combo
 
 - Prefer `pkgin` over raw `pkg_add`/`pkg_delete` for dependency-aware

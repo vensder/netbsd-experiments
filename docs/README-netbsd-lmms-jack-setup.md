@@ -83,6 +83,13 @@ tested here.
 jackd -v -Sr -d sun -p 512 -r 44100 -w 32
 ```
 
+or, confirmed clean/error-free with `jack-example-tools` installed
+(§6) and default word length:
+
+```sh
+jackd -v -Sr -d sun -p 1024 -r 48000
+```
+
 Flags:
 | Flag | Meaning |
 |------|---------|
@@ -161,13 +168,48 @@ is **not reliable** — treat as suspect, not a required tool.
 
 **Note:** the `jack-1.9.22` pkgsrc package on this system ships
 **server-only** — `pkg_info -qL jack | grep bin/` returns only
-`/usr/pkg/bin/jackd`. There is no `jack_lsp`, `jack_connect`, or
-`jack_disconnect` available, and no separate `jack-tools` package
-exists in this pkgsrc tree either. Practical consequence: manual
-port patching has to go through an application's own connection UI
-(qjackctl's Connect window, jack-keyboard's own dropdown) or through
-a client's auto-connect properties (see §10, GStreamer's
-`port-pattern`) — there is no CLI fallback for this on this system.
+`/usr/pkg/bin/jackd`. The client tools (`jack_lsp`, `jack_connect`,
+`jack_disconnect`, etc.) were split upstream into a separate
+`jack-example-tools` repository and are packaged in pkgsrc as a
+**`wip` (work-in-progress) package**, not yet in the main tree:
+
+```sh
+cd /usr/pkgsrc/wip/jack-example-tools
+sudo make install clean
+```
+
+**Known packaging bug (as of this `wip` snapshot):** the package's
+`PLIST` lists three internal JACK client libraries with a macOS
+`.dylib` extension instead of the correct NetBSD/ELF `.so` extension,
+causing the install to complain about missing files. This also
+explains `jack_get_descriptor returns null for 'jack_inprocess.so'`
+(and `jack_internal_metro.so`, `jack_intime.so`) messages seen in
+`jackd -v` output before this is fixed — JACK looks for the correct
+`.so` name at runtime while the actually-installed file was still
+named `.dylib`.
+
+**Fix — edit `PLIST` before building:**
+
+```sh
+cd /usr/pkgsrc/wip/jack-example-tools
+sed -i '' -e 's/\.dylib$/.so/' PLIST   # or edit manually
+```
+(the three affected lines: `lib/jack/jack_inprocess.so`,
+`lib/jack/jack_internal_metro.so`, `lib/jack/jack_intime.so` — replace
+their `.dylib` counterparts in `PLIST`)
+
+Then build/install as above.
+
+After installing this, JACK sessions became noticeably more stable —
+a full `jackd -v -Sr -d sun -p 1024 -r 48000` session with `amsynth`,
+`jack-keyboard`, and `lmms` all connected produced a clean verbose log
+with **zero errors**, versus the intermittent `ProcessGraphSync`/
+`SuspendRefNum`/socket-read errors seen earlier in this document. It's
+not confirmed whether installing the real client tools fixed an
+underlying issue, or whether earlier instability was coincidental —
+but this is now the recommended baseline setup regardless, since it
+also unlocks proper `jack_lsp`/`jack_connect` port management instead
+of routing through GStreamer's `port-pattern` workaround (§10).
 
 If debugging a qjackctl hang again:
 

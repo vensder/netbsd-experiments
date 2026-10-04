@@ -20,15 +20,22 @@ seatd 0.9.3, xwayland 24.1.
 
 ## 1. Make pkgsrc install rc.d scripts automatically
 
-Packages that ship services (dbus, avahi, ...) only print a note unless
-`PKG_RC_D_SCRIPTS=YES` is in the environment at install time. It is read by the
-package install scripts, so it belongs in root's environment, not in
-`/etc/pkg_install.conf`.
+Packages that ship services (dbus, avahi, ...) only print a note and leave the
+script in `/usr/pkg/share/examples/rc.d/` unless `PKG_RCD_SCRIPTS=YES` is set
+(pkgsrc guide, 20.3.1 and 21.6.14). It does not go in `/etc/rc.conf` or
+`/etc/pkg_install.conf`:
+
+- binary packages (pkg_add / pkgin): environment variable at install time
+- building from source: `/etc/mk.conf`
 
 ```sh
-echo 'export PKG_RC_D_SCRIPTS=YES' >> /root/.profile
-export PKG_RC_D_SCRIPTS=YES
+echo 'export PKG_RCD_SCRIPTS=YES' >> /root/.profile
+export PKG_RCD_SCRIPTS=YES
+echo 'PKG_RCD_SCRIPTS=YES' >> /etc/mk.conf    # only matters for source builds
 ```
+
+Scripts are copied only if the target in `/etc/rc.d` does not already exist.
+The service still has to be enabled in `/etc/rc.conf`.
 
 ## 2. Install packages
 
@@ -45,7 +52,7 @@ pkgin install lxqt openbox obconf-qt lxqt-wayland-session labwc xwayland
 `seatd` is pulled in as a dependency and is started by the Wayland session
 script.
 
-If `PKG_RC_D_SCRIPTS` was not set during install, copy the service scripts by
+If `PKG_RCD_SCRIPTS` was not set during install, copy the service scripts by
 hand:
 
 ```sh

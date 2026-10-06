@@ -1,10 +1,12 @@
 # Document Index
 * [Building Chromium from `pkgsrc-wip` on NetBSD](./docs/README-chromium-netbsd-build.md)
 * [Building `inputmethod/ibus` on NetBSD when the build fails](./docs/README-ibus-netbsd-build.md)
+* [Recovering the NetBSD EFI System Partition (without rebooting)](./docs/README-netbsd-efi-recovery.md)
 * [NetBSD 11 on a dedicated GPT partition alongside Fedora and Slackware](./docs/README-netbsd-install-alongside-linux.md)
 * [LMMS + JACK on NetBSD (ThinkPad T440s) — Setup Notes](./docs/README-netbsd-lmms-jack-setup.md)
 * [LXQt on NetBSD 11 (X11 and Wayland)](./docs/README-netbsd-lxqt-x11-wayland.md)
 * [Running KDE Plasma 6 on NetBSD 11 via pkgsrc](./docs/README-plasma6-netbsd11.md)
 * [Syncing built pkgsrc packages: laptop ↔ PC's NetBSD VM (via jump host)](./docs/README-rsync-laptop-to-vm.md)
+* [Porting the iwx driver (Intel Wi-Fi 6 AX200) to NetBSD](./docs/TODO-netbsd-iwx-port-notes.md)
 * [Running 32-bit Windows apps (Wine) on NetBSD 10.1 amd64](./docs/wine/README-wine32-sandboxing.md)
 * [Running non-English Windows apps in the Wine32 sandbox on NetBSD](./docs/wine/README-wine-non-english-apps.md)

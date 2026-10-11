@@ -36,6 +36,10 @@ unmounted).
   Wait for it; do not unplug the stick.
 - `rsync file user@host` (no trailing colon) copies **locally** into a file
   named `user@host`. Remote destination needs `user@host:`.
+- Installing Fedora **overwrites `EFI/boot/bootx64.efi`** (the generic
+  fallback path) with shim, even when the ESP is not reformatted. Keep the
+  NetBSD loader in `EFI/NetBSD/bootx64.efi` and boot it via rEFInd.
+  FAT is case-insensitive: `EFI/boot` and `EFI/BOOT` are the same directory.
 
 ## Example layout
 
@@ -303,21 +307,186 @@ sudo resize_ffs -p -v /dev/rdkN                     # grows to the partition siz
 sudo fsck -f /dev/rdkN
 ```
 
-## 7. Adding Linux (Fedora Silverblue) in the free space
+## 7. Installing Fedora Silverblue into the free space
 
-- Reuse the existing ESP: mount it at `/boot/efi`, **do not format** it.
-  128 MiB is enough for shim + GRUB.
-- Create in the free space: `/boot` ext4 (~2 GiB) and `/` btrfs (rest).
-  Silverblue's read-only tree is an ostree deployment inside the btrfs root,
-  not a separate partition. No swap partition needed (zram).
-- Back up the ESP again right before installing.
-- Booting: Fedora adds its own UEFI entry; choose NetBSD or Fedora from the
-  firmware boot menu (F12 on ThinkPads). Optionally install rEFInd
-  (maintained successor of rEFIt) into `EFI/refind/`, not `EFI/BOOT/`, and
-  have it chainload `EFI/fedora/shimx64.efi` for Fedora.
-- Secure Boot stays off (NetBSD efiboot is unsigned).
+### 7.1 Before installing
 
-## 8. After the move
+- If the USB stick holds the dumps/ESP backups, copy them elsewhere first:
+  writing the ISO wipes the stick.
+- Back up the ESP from NetBSD (the installer will write to it):
+
+```sh
+sudo mount -t msdos /dev/dkESP /mnt
+tar -C /mnt -cf /home/$USER/esp-before-fedora.tar .
+df -h /mnt                          # shim + GRUB need ~15 MB
+sudo umount /mnt
+```
+
+- Leave the free space **unallocated**. NetBSD cannot create ext4/btrfs, and
+  the installer creates the partitions itself.
+- Secure Boot stays off (NetBSD efiboot is unsigned); Fedora boots fine
+  without it.
+
+### 7.2 Write the installer ISO (from Linux)
+
+Check the device with `lsblk` first - `dd` overwrites the target.
+
+```sh
+sudo dd if=Fedora-Silverblue-ostree-x86_64-XX.iso of=/dev/sdX bs=4M status=progress conv=fsync
+```
+
+### 7.3 Advanced (custom) partitioning in the installer
+
+Boot the stick in **UEFI** mode (F12 on ThinkPads). Choose custom/advanced
+storage, not automatic.
+
+| Mount point | Device                  | Format              | Size           |
+|-------------|-------------------------|---------------------|----------------|
+| `/boot/efi` | existing ESP (p1)       | keep existing (efi) | 128 MiB        |
+| `/boot`     | new, in free space      | ext4                | 2 GiB          |
+| `/`         | new, in free space      | btrfs               | rest (~46 GiB) |
+
+Notes:
+
+- There is no explicit "do not format" option: the existing ESP row shows its
+  current format (`efi`). Leave it unchanged; if a "Reformat" checkbox is
+  shown, keep it unchecked.
+- Warning "/boot/efi partition is less than 500 MB" is only a recommendation.
+  Kernels and initramfs go to `/boot`, the ESP only holds shim + GRUB.
+- Silverblue's read-only tree is an ostree deployment inside the btrfs root,
+  not a separate partition. No swap partition (zram is used).
+- Leave the NetBSD partitions unassigned.
+- **Before clicking Install**, review the storage summary: only create/format
+  of the two new partitions, and mount (no format) of the existing ESP.
+  Nothing on the NetBSD partitions.
+
+### 7.4 After installing
+
+- After reboot only GRUB with Fedora is shown (Fedora is first in BootOrder).
+- `EFI/boot/bootx64.efi` is now shim (see section 8 to restore NetBSD's
+  loader in its own directory).
+- To test custom images, install stock Silverblue first, then rebase:
+
+```sh
+rpm-ostree rebase ostree-unverified-registry:<registry>/<image>:<tag>
+```
+
+Resulting ESP layout:
+
+```
+EFI/
+  boot/     BOOTIA32.EFI bootx64.efi(=shim) fbia32.efi fbx64.efi
+  fedora/   shimx64.efi grubx64.efi mmx64.efi grub.cfg BOOTX64.CSV ...
+  NetBSD/   boot.cfg bootx64.efi (restored, section 8)
+  refind/   refind_x64.efi refind.conf icons/ (section 9)
+```
+
+## 8. Recovering the NetBSD UEFI loader (from Fedora)
+
+### 8.1 Check whether it was overwritten
+
+```sh
+sudo sha256sum /boot/efi/EFI/boot/bootx64.efi /boot/efi/EFI/fedora/shimx64.efi
+sudo grep -ac NetBSD /boot/efi/EFI/boot/bootx64.efi
+```
+
+Same hashes and `0` from grep means the fallback loader is now shim and
+NetBSD is unbootable until its loader is restored.
+
+### 8.2 Restore from a NetBSD partition
+
+Every NetBSD install ships its UEFI loader as `/usr/mdec/bootx64.efi`. Use the
+newest one (it boots older kernels too). Linux can read UFS2 read-only:
+
+```sh
+lsblk -o NAME,SIZE,FSTYPE            # identify the NetBSD partitions
+sudo modprobe ufs
+sudo mount -t ufs -o ro,ufstype=ufs2 /dev/sda3 /mnt
+sudo cp /mnt/usr/mdec/bootx64.efi /boot/efi/EFI/NetBSD/bootx64.efi
+sudo umount /mnt
+sudo grep -ac NetBSD /boot/efi/EFI/NetBSD/bootx64.efi    # > 0
+```
+
+The ESP is mounted root-only under Fedora, so use `sudo` even for reads.
+
+Fallbacks if the `ufs` module is missing:
+
+- `EFI/boot/bootx64.efi` from the ESP backup (`esp-copy`,
+  `esp-before-fedora.tar`).
+- `bootx64.efi` from the matching NetBSD release sets on cdn.netbsd.org.
+
+Leave `EFI/boot/bootx64.efi` as shim; the fallback path now belongs to
+Fedora. NetBSD's loader reads `EFI/NetBSD/boot.cfg`, so the `hd0b`/`hd0c`
+menu keeps working.
+
+## 9. Installing and configuring rEFInd (from Fedora)
+
+rEFInd (the maintained successor of rEFIt) lives in its own ESP directory, so
+Fedora reinstalls do not touch it. It is not in Fedora's repos; on Silverblue
+install the binaries manually.
+
+### 9.1 Copy the files
+
+Download the current `refind-bin-*.zip` from
+https://www.rodsbooks.com/refind/getting.html, then:
+
+```sh
+unzip refind-bin-*.zip
+sudo mkdir -p /boot/efi/EFI/refind
+sudo cp refind-bin-*/refind/refind_x64.efi /boot/efi/EFI/refind/
+sudo cp -r refind-bin-*/refind/icons /boot/efi/EFI/refind/
+sudo df -h /boot/efi
+```
+
+Do not install rEFInd as `EFI/boot/bootx64.efi`; Fedora owns that path.
+
+### 9.2 Configuration (manual entries only)
+
+```sh
+sudo vim /boot/efi/EFI/refind/refind.conf
+```
+
+```
+timeout 10
+scanfor manual
+
+menuentry "Fedora" {
+    icon   /EFI/refind/icons/os_fedora.png
+    loader /EFI/fedora/shimx64.efi
+}
+
+menuentry "NetBSD" {
+    icon   /EFI/refind/icons/os_netbsd.png
+    loader /EFI/NetBSD/bootx64.efi
+}
+```
+
+`scanfor manual` hides the clutter (shim, mm, fb, fallback loader) that
+auto-scanning would show. NetBSD opens its own `boot.cfg` menu (10.1 / 11);
+Fedora goes shim -> GRUB -> ostree deployments. Paths stay the same across
+Fedora reinstalls, so the config never needs changes.
+
+### 9.3 Register in NVRAM
+
+```sh
+sudo efibootmgr --create --disk /dev/sda --part 1 \
+    --loader '\EFI\refind\refind_x64.efi' --label 'rEFInd'
+efibootmgr                          # rEFInd should be first in BootOrder
+```
+
+### 9.4 After every Fedora reinstall
+
+The installer puts "Fedora" first again. Restore the order:
+
+```sh
+efibootmgr                                  # note entry numbers
+sudo efibootmgr -o XXXX,YYYY,...            # rEFInd first
+```
+
+Also re-check that `EFI/NetBSD/bootx64.efi` and `EFI/refind/` are intact.
+rEFInd is always reachable through the F12 boot menu as well.
+
+## 10. After the move
 
 - Re-fetch pkgsrc (and wip) if it was deleted to save space.
 - Re-create swap as a file if needed:

@@ -103,12 +103,22 @@ PAM logins); `x11-user` only runs the greeter's X server as the sddm user,
 which needs extra setup (Xorg.wrap, device permissions) and is not
 needed for a normal desktop.
 
-What was wrong in the generated file:
+Notes on the generated file (`sddm --example-config`):
 
-- `Session=lxqt-session` - must be the .desktop file name, i.e.
-  `lxqt.desktop`, or empty. (Harmless while `User=` is empty, since
-  autologin is then off, but wrong as soon as you set a user.)
-- `InputMethod=qtvirtualkeyboard` - should be empty on a laptop/desktop.
+- `[Autologin] Session=` is empty by default, which is right. If you turn
+  on autologin later, it takes the .desktop file name, i.e.
+  `lxqt.desktop` (not `lxqt-session`).
+- `InputMethod=qtvirtualkeyboard` is SDDM's built-in default, so you must
+  set `InputMethod=` explicitly to turn it off. It is an on-screen
+  keyboard for tablets; on a laptop/desktop it is useless at best, and
+  can cause greeter warnings or a stray keyboard button.
+- `HideShells=` is empty by default; see the `[Users]` block above.
+
+To see only what your own sddm.conf sets (without the comments):
+
+```sh
+grep -v '^#' /usr/pkg/etc/sddm.conf | grep .
+```
 
 ## 5. Test by hand before enabling at boot
 

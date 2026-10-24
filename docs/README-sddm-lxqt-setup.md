@@ -268,12 +268,22 @@ Nothing to set up: `startlxqtwayland` calls the setuid `seatd-launch`,
 which starts a private seatd for the session, the same way as in your
 manual test.
 
-UNSURE: seatd takes the VT that is active when the session starts. From
-SDDM that is the VT SDDM switches to for the session. If you see `Could
-not open terminal for VT ...` in the session log, SDDM did not give the
-session a usable VT on NetBSD. Then the fallback is to keep starting
-Wayland by hand from ttyE1 (`startlxqtwayland`), as in your README, and
-use SDDM for X11 only.
+RESULT (NetBSD 11, 2026-10-24): does NOT work from SDDM. The greeter's
+X server runs on /dev/ttyE4 (Xorg.0.log: "Using wscons driver on
+/dev/ttyE4"). SDDM then starts the Wayland session on that same VT 5,
+seatd cannot open /dev/ttyE4 ("Could not open terminal for VT 5: Device
+not configured"), and labwc gives up after 10 s with "Failed to start a
+DRM session". SDDM on NetBSD has no way to give the session a fresh VT,
+and there is no sddm.conf setting for it.
+
+Working setup: SDDM for X11 (LXQt Desktop). For Wayland, log in on
+ttyE1 (Ctrl+Alt+F2) and run `startlxqtwayland`, as in your README.
+To hide the broken menu entry, in /usr/pkg/etc/sddm.conf:
+
+```ini
+[Wayland]
+SessionDir=/nonexistent
+```
 
 ### 8.4 sddm.conf
 
@@ -316,3 +326,23 @@ Typical errors and causes (same as in your README):
 - `XDG_RUNTIME_DIR` errors: 8.2 not picked up (wrong shell file).
 - `Failed to start a DRM session` / `Could not open terminal for VT`:
   seatd could not get the VT from SDDM (see 8.3 UNSURE note).
+
+### 8.7 Manual Wayland start: issues seen on NetBSD 11 (2026-10-24)
+
+- `socket file found at socket path /var/run/seatd.sock, refusing to
+  start`: stale socket from a failed attempt. If `pgrep -lf seatd` shows
+  nothing, `sudo rm /var/run/seatd.sock` (a reboot also clears it).
+- `Failed to get DRM device: Permission denied` then `renderD0` /
+  `Could not initialize renderer`: /dev/dri/card0 was 0640. Fix:
+  `sudo chmod 660 /dev/dri/card0` (user must be in wheel).
+- Log the session: `startlxqtwayland > $HOME/wayland.log 2>&1`.
+
+Harmless messages once it runs: `/dev/wskbd1..9` and `/dev/wsmouse1..9`
+"Device not configured" / "No such file" (wlroots probes all, only the
+existing ones are used), tray plugin "X11 only", xkbcomp keysym warnings,
+portal not found.
+
+Known limits without logind/ConsoleKit sessions: the polkit agent cannot
+register (GUI admin prompts do not work), and the LXQt power, suspend
+and hibernate buttons do nothing (no org.freedesktop.login1). Shut down
+with `sudo shutdown -p now` from a terminal.

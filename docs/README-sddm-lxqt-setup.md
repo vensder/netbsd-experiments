@@ -202,3 +202,117 @@ Exec=dbus-launch --exit-with-session startlxqt
   Then pick "LXQt Desktop (dbus)" in the greeter.
 - Shutdown/reboot from the greeter uses /sbin/shutdown as root; that works
   as configured.
+
+## 8. Optional: LXQt Wayland session (LXQt + labwc) from SDDM
+
+This builds on your earlier notes (README-netbsd-lxqt-x11-wayland.md),
+where `startlxqtwayland` from ttyE1 worked. The X11 setup above stays the
+default; this only adds a second session you can pick in the greeter.
+
+The greeter itself keeps running on X11 (`DisplayServer=x11`). SDDM can
+start a Wayland session from an X11 greeter; running the greeter on
+Wayland (weston kiosk) is experimental and not needed.
+
+Requirements are the same as for the manual Wayland start:
+`/dev/dri/card0` exists, `wscons=YES`, gettys on ttyE1-ttyE3 (you have
+these), labwc + lxqt-wayland-session installed. Note: labwc and xwayland
+are in the NetBSD 11 binary repo but not in the NetBSD 10.1 one
+(`pkgin install labwc` says "not available" there), so this section
+needs NetBSD 11. Building from source does not help either: the pkgsrc
+wlroots Makefile refuses NetBSD < 11 ("DRM_IOCTL_GET_UNIQUE is not allowed
+on render nodes"), and labwc and sway both depend on wlroots. Without labwc the session fails with
+`Could not start target: No such file or directory`.
+
+bash users: a login bash reads ~/.bash_profile and then NOT ~/.profile.
+If you have ~/.bash_profile, add `. ~/.profile` to it so the
+XDG_RUNTIME_DIR lines (8.2) are picked up.
+
+### 8.1 Checks first (please paste the output)
+
+```sh
+ls /usr/pkg/share/wayland-sessions/
+cat /usr/pkg/share/wayland-sessions/lxqt-wayland.desktop
+grep -n seatd "$(which startlxqtwayland)"
+ls -l /usr/pkg/bin/seatd /usr/pkg/bin/seatd-launch
+ls /usr/pkg/share/examples/rc.d/ | grep -i seat
+ls -l /dev/dri
+```
+
+Results (netbsd10, 2026-10-24):
+
+- Session file: `lxqt-wayland.desktop`, `Exec=startlxqtwayland`.
+- `startlxqtwayland` runs the compositor via `seatd-launch`.
+- `/usr/pkg/bin/seatd-launch` is setuid root (`-r-s--x--x root`), so it
+  can start its own seatd as a normal user. No rc.d script for seatd
+  exists in pkgsrc, and none is needed.
+- `/dev/dri/card0` exists (root:wheel 0660; seatd opens it as root).
+
+### 8.2 XDG_RUNTIME_DIR
+
+SDDM only sets XDG_RUNTIME_DIR when logind exists, so on NetBSD it is
+unset. The wayland-session script sources ~/.profile for sh/ksh users,
+so the lines from your README are enough. In the desktop user's
+~/.profile:
+
+```sh
+export XDG_RUNTIME_DIR=/tmp/$(id -u)-runtime
+mkdir -p -m 700 $XDG_RUNTIME_DIR
+```
+
+If your login shell is csh/tcsh, put the equivalent in ~/.login instead
+(the script sources that for csh).
+
+### 8.3 seatd
+
+Nothing to set up: `startlxqtwayland` calls the setuid `seatd-launch`,
+which starts a private seatd for the session, the same way as in your
+manual test.
+
+UNSURE: seatd takes the VT that is active when the session starts. From
+SDDM that is the VT SDDM switches to for the session. If you see `Could
+not open terminal for VT ...` in the session log, SDDM did not give the
+session a usable VT on NetBSD. Then the fallback is to keep starting
+Wayland by hand from ttyE1 (`startlxqtwayland`), as in your README, and
+use SDDM for X11 only.
+
+### 8.4 sddm.conf
+
+Nothing to change. The default `[Wayland] SessionDir` already includes
+/usr/pkg/share/wayland-sessions, which is why "LXQt (Wayland)" and labwc
+show up in the menu. For autologin into Wayland you would set:
+
+```ini
+[Autologin]
+User=<your user>
+Session=lxqt-wayland.desktop
+```
+
+### 8.5 Compositor choice
+
+On first start LXQt asks for the compositor; enter `labwc` as in your
+README. To preset it (UNSURE about the key name, the dialog is the safe
+way):
+
+```sh
+mkdir -p ~/.config/lxqt
+printf '[General]\ncompositor=labwc\n' >> ~/.config/lxqt/session.conf
+```
+
+### 8.6 Test
+
+```sh
+/etc/rc.d/sddm onestart
+```
+
+Pick "LXQt (Wayland)", log in. If you get thrown back to the greeter:
+
+```sh
+less ~/.local/share/sddm/wayland-session.log   # session + labwc output
+less /var/log/sddm.log                         # only for manual runs
+```
+
+Typical errors and causes (same as in your README):
+
+- `XDG_RUNTIME_DIR` errors: 8.2 not picked up (wrong shell file).
+- `Failed to start a DRM session` / `Could not open terminal for VT`:
+  seatd could not get the VT from SDDM (see 8.3 UNSURE note).

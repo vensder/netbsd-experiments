@@ -293,6 +293,21 @@ on NetBSD, and no sddm.conf setting changes this. Hide the entry with
 `[Wayland] SessionDir=/nonexistent` (section 5) and start Wayland by
 hand as described below.
 
+Details (NetBSD 11.0, sddm 0.21.0, seatd 0.9.3):
+
+- With screens 0 to 4 in use, SDDM finds no free VT for the Wayland
+  session ("Failed to open new VT: Device not configured", "VT -1").
+- With an extra screen 5 in /etc/wscons.conf, SDDM picks VT 6
+  (/dev/ttyE5) and switches to it, but seatd still fails: on NetBSD,
+  seatd maps VT N to /dev/ttyEN instead of /dev/ttyE(N-1)
+  (`get_tty_path()` in seatd common/terminal.c), so it opens
+  /dev/ttyE6.
+- Adding screen 6 as well lets the session start, but the kernel then
+  panicked ("fatal breakpoint trap in supervisor mode") when a browser
+  was started. The wscons configuration itself is valid (wsconscfg(8):
+  up to 8 screens, 0 to 7), so this is most likely a kernel bug
+  triggered by the VT mismatch. Do not use this setup.
+
 ### 9.2 Requirements
 
 - NetBSD 11. wlroots (needed by labwc and sway) refuses to build on

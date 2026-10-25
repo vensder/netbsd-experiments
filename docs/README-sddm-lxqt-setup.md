@@ -304,9 +304,11 @@ Details (NetBSD 11.0, sddm 0.21.0, seatd 0.9.3):
   /dev/ttyE6.
 - Adding screen 6 as well lets the session start, but the kernel then
   panicked ("fatal breakpoint trap in supervisor mode") when a browser
-  was started. The wscons configuration itself is valid (wsconscfg(8):
+  was started (backtrace: breakpoint, wskbd_translate, wskbd_input,
+  i.e. while handling a key press). The wscons configuration itself is valid (wsconscfg(8):
   up to 8 screens, 0 to 7), so this is most likely a kernel bug
-  triggered by the VT mismatch. Do not use this setup.
+  triggered by the VT mismatch. The exact configuration is in 9.5;
+  do not use it for daily work.
 
 ### 9.2 Requirements
 
@@ -362,6 +364,86 @@ On first start, `startlxqtwayland` finds no compositor in
 ~/.config/lxqt/session.conf, starts labwc and opens the session
 settings; set the compositor to `labwc` there. The choice is saved, and
 the X11 window manager setting is not affected.
+
+### 9.4 How seatd is started
+
+seatd has no configuration file and needs no rc.d service for this
+session.
+
+- `/usr/pkg/bin/startlxqtwayland` is a shell script. It reads the
+  compositor from `compositor=` in ~/.config/lxqt/session.conf and
+  starts it through seatd-launch; for labwc:
+  `exec seatd-launch $COMPOSITOR -C $XDG_CONFIG_HOME/labwc -S lxqt-session`.
+  Without a configured compositor it falls back to labwc and opens the
+  session settings.
+- `/usr/pkg/bin/seatd-launch` is setuid root. It starts a private
+  `seatd` as root with the socket /var/run/seatd.sock, runs the
+  compositor as the calling user, and stops seatd when the compositor
+  exits.
+- The only settings are environment variables, set before
+  `startlxqtwayland` (e.g. in wayland.sh):
+
+```sh
+export SEATD_LOGLEVEL=debug      # more detail in the log (default: info)
+export LIBSEAT_BACKEND=seatd     # libseat backend used by the compositor
+```
+
+- The VT that seatd opens is not configurable; see the off-by-one in
+  section 9.1.
+
+See seatd(1), seatd-launch(1) and labwc(1).
+
+### 9.5 Experimental: Wayland session from SDDM
+
+WARNING: this setup lets SDDM start "LXQt (Wayland)", but the kernel
+panicked with it on NetBSD 11.0 when typing in a browser (section 9.1).
+Use it only for testing, and keep the manual start (9.3) for daily use.
+
+/etc/wscons.conf creates two extra screens:
+
+```
+screen  1       -       vt100
+screen  2       -       vt100
+screen  3       -       vt100
+screen  4       -       -
+screen  5       -       vt100
+screen  6       -       vt100
+```
+
+/etc/ttys keeps gettys only on ttyE1 to ttyE3; ttyE4, ttyE5 and ttyE6
+must stay without a getty:
+
+```
+constty "/usr/libexec/getty Pc"         wsvt25  on secure
+ttyE0   "/usr/libexec/getty Pc"         wsvt25  off secure
+ttyE1   "/usr/libexec/getty Pc"         wsvt25  on secure
+ttyE2   "/usr/libexec/getty Pc"         wsvt25  on secure
+ttyE3   "/usr/libexec/getty Pc"         wsvt25  on secure
+```
+
+Role of each screen:
+
+| Device | VT | Used by |
+|--------|----|---------|
+| ttyE0 | 1 | console (constty) |
+| ttyE1..ttyE3 | 2..4 | getty logins |
+| ttyE4 | 5 | X server of the SDDM greeter |
+| ttyE5 | 6 | free VT that SDDM switches to for the Wayland session |
+| ttyE6 | 7 | needed only because seatd opens /dev/ttyE6 for VT 6 |
+
+In sddm.conf, remove `SessionDir=/nonexistent` from `[Wayland]` so the
+Wayland sessions appear in the menu again.
+
+The screens can be added without a reboot:
+
+```sh
+wsconscfg 5
+wsconscfg 6
+```
+
+`wsconscfg N` reports "screen N is already configured" if it exists.
+To return to the stable setup, delete the `screen 5` and `screen 6`
+lines from /etc/wscons.conf and reboot.
 
 ## 10. Troubleshooting
 

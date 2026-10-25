@@ -9,6 +9,7 @@
 * [Running KDE Plasma 6 on NetBSD 11 via pkgsrc](./docs/README-plasma6-netbsd11.md)
 * [Syncing built pkgsrc packages: laptop ↔ PC's NetBSD VM (via jump host)](./docs/README-rsync-laptop-to-vm.md)
 * [SDDM and LXQt on NetBSD](./docs/README-sddm-lxqt-setup.md)
+* [SLiM with several sessions on NetBSD 11](./docs/README-slim-sessions.md)
 * [Porting the iwx driver (Intel Wi-Fi 6 AX200) to NetBSD](./docs/TODO-netbsd-iwx-port-notes.md)
-* [Running non-English Windows apps in the Wine32 sandbox on NetBSD](./docs/wine/README-wine-non-english-apps.md)
 * [Running 32-bit Windows apps (Wine) on NetBSD 10.1 amd64](./docs/wine/README-wine32-sandboxing.md)
+* [Running non-English Windows apps in the Wine32 sandbox on NetBSD](./docs/wine/README-wine-non-english-apps.md)

@@ -1,10 +1,47 @@
-# SDDM + LXQt on NetBSD 11 (pkgsrc) - setup steps
+# SDDM and LXQt on NetBSD
 
-All commands as root. Keep sshd=YES so you can get back in if the screen
-locks up. Lines marked UNSURE are guesses; the check next to them tells you
-what is true on your box.
+Set up the SDDM display manager from pkgsrc to start an LXQt X11 session
+on NetBSD, and start an LXQt Wayland session (labwc) by hand from a
+virtual terminal.
 
-## 0. Checks (done, results on netbsd-shift)
+Tested on NetBSD 11.0 amd64 (X11 and Wayland) and NetBSD 10.1 amd64
+(X11 only) with binary packages from the official pkgsrc repository
+(sddm 0.21.0, lxqt 2.4, labwc 0.20).
+
+All commands run as root unless noted. Keep `sshd=YES` in /etc/rc.conf
+while experimenting, so the machine stays reachable if the screen hangs.
+
+## Contents
+
+1. Requirements
+2. Install the example files
+3. rc.conf
+4. Virtual terminals
+5. sddm.conf
+6. Test without enabling at boot
+7. Enable at boot
+8. Notes on the X11 session
+9. Wayland session
+10. Troubleshooting
+11. Known limitations
+
+A script that performs steps 2 and 5 and checks the result is available
+as `sddm-setup.sh` (see the end of this document).
+
+## 1. Requirements
+
+- X11 sets installed (`xbase xcomp xetc xfont xserver`); X server at
+  `/usr/X11R7/bin/X`.
+- Packages:
+
+```sh
+pkgin install sddm lxqt openbox daemonize
+```
+
+- D-Bus rc.d script present in /etc/rc.d (copy it from
+  /usr/pkg/share/examples/rc.d/dbus if missing).
+
+Checks:
 
 ```sh
 pkg_info -L sddm | grep -E 'examples|rc.d|dbus'
@@ -14,21 +51,27 @@ grep sddm /etc/passwd /etc/group
 cat /usr/pkg/share/xsessions/lxqt.desktop
 ```
 
-Findings:
+Expected:
 
-- Example files are in:
-  - `/usr/pkg/share/examples/rc.d/sddm`
-  - `/usr/pkg/share/examples/pam.d/sddm`, `sddm-autologin`, `sddm-greeter`
-  - `/usr/pkg/share/examples/sddm/org.freedesktop.DisplayManager.conf`
-- `/usr/pkg/sbin/daemonize` is installed (needed by the rc.d script).
-- X is base X: `/usr/X11R7/bin/X -> Xorg`. The default `ServerPath` is
-  correct, no change needed.
-- The `sddm` user and group exist, home `/var/lib/sddm`, shell nologin.
-- `lxqt.desktop` has `Exec=startlxqt`, `TryExec=lxqt-session`.
+- Example files under /usr/pkg/share/examples:
+  - `rc.d/sddm`
+  - `pam.d/sddm`, `pam.d/sddm-autologin`, `pam.d/sddm-greeter`
+  - `sddm/org.freedesktop.DisplayManager.conf`
+- `/usr/pkg/sbin/daemonize` exists. The rc.d script depends on it and
+  fails silently without it.
+- `/usr/X11R7/bin/X` exists (base X). If only `/usr/pkg/bin/X` exists
+  (modular Xorg from pkgsrc), set `ServerPath=/usr/pkg/bin/X` in the
+  `[X11]` section of sddm.conf.
+- User and group `sddm` exist, home `/var/lib/sddm`, shell
+  `/sbin/nologin`. The package normally creates them; otherwise:
+  `useradd -d /var/lib/sddm -s /sbin/nologin sddm`.
+- `lxqt.desktop` contains `Exec=startlxqt`.
 
-## 1. Copy the example files into place
+## 2. Install the example files
 
-pkgsrc does not install these automatically.
+pkgsrc does not install rc.d scripts, PAM files or D-Bus policies
+automatically (unless `PKG_RCD_SCRIPTS=YES` was set at install time, and
+that covers only rc.d scripts).
 
 ```sh
 cp /usr/pkg/share/examples/rc.d/sddm /etc/rc.d/sddm
@@ -47,144 +90,178 @@ cp /usr/pkg/share/examples/sddm/org.freedesktop.DisplayManager.conf \
 Notes:
 
 - pam.d/sddm includes `login`, which exists in base NetBSD
-  (/etc/pam.d/login), so the files work unchanged.
-- The D-Bus policy lets only root own org.freedesktop.DisplayManager. The
-  system bus only reads policies at start, hence the dbus restart.
+  (/etc/pam.d/login), so the PAM files work unchanged.
+- The D-Bus policy allows only root to own
+  org.freedesktop.DisplayManager. The system bus reads policies only at
+  start, hence the restart.
 
-## 2. rc.conf
+## 3. rc.conf
 
-Your rc.conf already has `dbus=YES` and `wscons=YES`, good. Leave
-`sddm=NO` for now; switch to YES only after the manual test in step 5
-works. That way a broken X setup cannot trap you at boot.
+Required:
 
-## 3. Make sure there is a getty to wait for
+```
+dbus=YES
+wscons=YES
+```
 
-The rc.d script waits up to 60 s for `/usr/libexec/getty` before starting
-sddm. Default /etc/ttys has gettys on ttyE0-ttyE3, so this is normally fine.
-X will take a free VT. If X fails with a VT error, check that /etc/ttys has
-at least one wscons screen *without* a getty (e.g. ttyE4 `off`) and that
-/etc/wscons.conf creates it (`screen 4 - vt100`). UNSURE: only needed if
-you see a VT error in the logs.
+Keep `sddm=NO` (or no sddm line at all) until the test in step 6
+succeeds. A broken X setup then cannot block the console at boot.
 
-## 4. Fix sddm.conf
+## 4. Virtual terminals
 
-Easiest: replace /usr/pkg/etc/sddm.conf with only the settings you change
-(everything else falls back to built-in defaults, which are what
---example-config printed). Back up the old one first:
+The rc.d script waits up to 60 seconds for `/usr/libexec/getty` to run
+before it starts sddm, and the Wayland session needs a real wscons
+screen (ttyE1..ttyE3). The default configuration covers both.
+
+/etc/ttys (relevant lines; the type must be `wsvt25`):
+
+```
+console "/usr/libexec/getty Pc"         wsvt25  off secure
+constty "/usr/libexec/getty Pc"         wsvt25  on secure
+ttyE0   "/usr/libexec/getty Pc"         wsvt25  off secure
+ttyE1   "/usr/libexec/getty Pc"         wsvt25  on secure
+ttyE2   "/usr/libexec/getty Pc"         wsvt25  on secure
+ttyE3   "/usr/libexec/getty Pc"         wsvt25  on secure
+```
+
+ttyE0 stays off while constty is on; they are the same screen. After
+editing /etc/ttys, `kill -HUP 1` makes init re-read it.
+
+/etc/wscons.conf should create screens 1 to 3, and a free screen for X:
 
 ```sh
-cp /usr/pkg/etc/sddm.conf /usr/pkg/etc/sddm.conf.orig
+grep '^screen' /etc/wscons.conf
+```
+
+```
+screen  1       -       vt100
+screen  2       -       vt100
+screen  3       -       vt100
+screen  4       -       -
+```
+
+The SDDM X server runs on the free screen (/dev/ttyE4, VT 5).
+
+## 5. sddm.conf
+
+`sddm --example-config` prints the built-in defaults; it does not read
+the existing configuration. A minimal /usr/pkg/etc/sddm.conf that only
+overrides what is needed:
+
+```sh
+cp /usr/pkg/etc/sddm.conf /usr/pkg/etc/sddm.conf.orig   # if it exists
 vim /usr/pkg/etc/sddm.conf
 ```
 
-Contents:
-
 ```ini
 [Autologin]
-# Leave both empty for a normal login screen.
-# For autologin: User=<your user> and Session=lxqt.desktop
+# Both empty: normal login screen.
+# Autologin: User=<login name> and Session=lxqt.desktop
 User=
 Session=
 
 [General]
 DisplayServer=x11
-# Was qtvirtualkeyboard: that is an on-screen keyboard for tablets and
-# breaks the greeter if the Qt module is not installed.
 InputMethod=
 
 [Users]
-# pkgsrc creates its system users (sddm, dbus, polkitd, ...) with
-# uid >= 1000, so MinimumUid does not filter them. Hide them by shell.
 HideShells=/sbin/nologin,/usr/sbin/nologin
+
+[Wayland]
+# Hide Wayland sessions from the menu; they do not work from SDDM on
+# NetBSD (see section 9).
+SessionDir=/nonexistent
 ```
 
-Keep `DisplayServer=x11`. The sddm daemon always runs as root (it does
-PAM logins); `x11-user` only runs the greeter's X server as the sddm user,
-which needs extra setup (Xorg.wrap, device permissions) and is not
-needed for a normal desktop.
+Why these settings:
 
-Notes on the generated file (`sddm --example-config`):
+- `[Autologin] Session=` takes the name of a .desktop file, e.g.
+  `lxqt.desktop`, not a program name. Empty means "last used session".
+- `InputMethod` defaults to `qtvirtualkeyboard`, an on-screen keyboard
+  for tablets. It must be set to empty explicitly to turn it off.
+- pkgsrc creates its system users (sddm, dbus, polkitd, ...) with uid
+  1000 or above, so `MinimumUid=1000` does not hide them from the user
+  list. They all use the nologin shell, so `HideShells` hides them.
+- `DisplayServer=x11` runs the greeter's X server as root. The sddm
+  daemon always runs as root, since it authenticates users through PAM.
+  `x11-user` only moves the greeter's X server to the sddm user and
+  needs extra setup (Xorg.wrap, device permissions); it brings no
+  benefit here.
 
-- `[Autologin] Session=` is empty by default, which is right. If you turn
-  on autologin later, it takes the .desktop file name, i.e.
-  `lxqt.desktop` (not `lxqt-session`).
-- `InputMethod=qtvirtualkeyboard` is SDDM's built-in default, so you must
-  set `InputMethod=` explicitly to turn it off. It is an on-screen
-  keyboard for tablets; on a laptop/desktop it is useless at best, and
-  can cause greeter warnings or a stray keyboard button.
-- `HideShells=` is empty by default; see the `[Users]` block above.
-
-To see only what your own sddm.conf sets (without the comments):
+To list only the settings actually present in the file:
 
 ```sh
 grep -v '^#' /usr/pkg/etc/sddm.conf | grep .
 ```
 
-## 5. Test by hand before enabling at boot
+## 6. Test without enabling at boot
 
-Do this from the text console (not over ssh, not from inside X), with no X
-server running:
-
-```sh
-/etc/rc.d/dbus status || /etc/rc.d/dbus start
-mkdir -p /var/lib/sddm && chown sddm:sddm /var/lib/sddm
-/usr/pkg/bin/sddm > /var/log/sddm.log 2>&1 &
-```
-
-You should get the login screen. Pick "LXQt Desktop" in the session menu
-(bottom of the default theme) and log in.
-
-If it fails, look at (from ssh or another console, Ctrl+Alt+F1):
-
-```sh
-less /var/log/sddm.log                          # daemon + greeter messages
-less /var/log/Xorg.0.log                        # X server (may be Xorg.1.log)
-less ~USER/.local/share/sddm/xorg-session.log   # your LXQt session output
-```
-
-To stop it: `kill <pid of /usr/pkg/bin/sddm>` (`pkill -x sddm` may not match
-on NetBSD; `pkill -f /usr/pkg/bin/sddm` does).
-
-Better: test through the rc.d script, which works while rc.conf still has
-sddm=NO (or no sddm line at all) and writes a pidfile so stop works:
+The `one*` commands of the rc.d script work while rc.conf has
+`sddm=NO` or no sddm line. Run from the text console, with no X server
+running:
 
 ```sh
 /etc/rc.d/sddm onestart
+```
+
+Choose "LXQt Desktop" in the session menu and log in. SDDM remembers
+the last session, so the choice is needed only once.
+
+To stop it:
+
+```sh
 /etc/rc.d/sddm onestop
 ```
 
-Plain `stop`/`start` are refused while sddm=NO, and neither form can stop
-an sddm you started by hand (no pidfile).
+Plain `start` and `stop` are refused while `sddm=NO`. An sddm started
+by hand (`/usr/pkg/bin/sddm &`) writes no pidfile, so the rc.d script
+cannot stop it; use `pkill -f /usr/pkg/bin/sddm` in that case
+(`pkill -x sddm` may not match on NetBSD).
 
-`sddm --test-mode` is less useful than it sounds: it is meant to run the
-greeter inside an existing X session (via Xephyr) to preview themes, so it
-does not test the real login path. The manual run above does.
-
-## 6. Enable at boot
+To see sddm's own messages, run it by hand once:
 
 ```sh
-vim /etc/rc.conf       # change sddm=NO to sddm=YES
+/usr/pkg/bin/sddm > /var/log/sddm.log 2>&1 &
+```
+
+`sddm --test-mode` only previews the greeter inside an existing X
+session (via Xephyr); it does not test a real login.
+
+## 7. Enable at boot
+
+```sh
+vim /etc/rc.conf       # set sddm=YES
 reboot
 ```
 
-Note: the rc.d script starts sddm through daemonize, which throws away
-stderr, so at boot /var/log/sddm.log stays empty. If boot-time start fails
-but the manual run works, the difference is almost always PATH or timing;
-debug with the manual run.
+The rc.d script starts sddm through daemonize, which discards stderr.
+If the boot-time start fails while `onestart` works, debug with the
+manual run from step 6.
 
-Recovery if the screen is stuck: ssh in (or Ctrl+Alt+F1), then
-`/etc/rc.d/sddm stop` or `pkill -x sddm`, and set sddm=NO.
+Recovery when the screen hangs: log in over ssh or switch to a text
+console (Ctrl+Alt+F2), run `/etc/rc.d/sddm stop`, and set `sddm=NO`.
 
-## 7. LXQt-specific notes
+## 8. Notes on the X11 session
 
-- The session starts through /usr/pkg/share/sddm/scripts/Xsession, which
-  sources /etc/profile and ~/.profile, then runs `startlxqt` (the Exec=
-  line of lxqt.desktop). PATH comes from `[Users] DefaultPath`, which
-  already includes /usr/pkg/bin.
-- UNSURE: without systemd there is no per-user D-Bus session bus started
-  for you. If LXQt starts but the panel, notifications or power buttons
-  complain about D-Bus, add a session that starts one. Use a separate file
-  so pkgin upgrades do not overwrite it:
+- SDDM starts the session through /usr/pkg/share/sddm/scripts/Xsession,
+  which starts the user's login shell as a login shell and then runs
+  the `Exec=` line of the .desktop file (`startlxqt`). PATH comes from
+  `[Users] DefaultPath`, which includes /usr/pkg/bin.
+- Environment variables belong in the login shell's startup file. For
+  bash: a login bash reads only the first of ~/.bash_profile,
+  ~/.bash_login, ~/.profile. When ~/.bash_profile exists, add
+  `. ~/.profile` to it, otherwise ~/.profile is ignored.
+- Window manager: LXQt asks on first start; choose `openbox`. Or preset
+  it as the desktop user:
+
+```sh
+mkdir -p ~/.config/lxqt
+printf '[General]\nwindow_manager=openbox\n' >> ~/.config/lxqt/session.conf
+```
+
+- Session log: `~/.local/share/sddm/xorg-session.log`.
+- If LXQt applets complain about a missing D-Bus session bus, create a
+  second session entry that starts one:
 
 ```sh
 cp /usr/pkg/share/xsessions/lxqt.desktop \
@@ -192,157 +269,142 @@ cp /usr/pkg/share/xsessions/lxqt.desktop \
 vim /usr/pkg/share/xsessions/lxqt-dbus.desktop
 ```
 
-  Change these two lines:
-
 ```ini
 Name=LXQt Desktop (dbus)
 Exec=dbus-launch --exit-with-session startlxqt
 ```
 
-  Then pick "LXQt Desktop (dbus)" in the greeter.
-- Shutdown/reboot from the greeter uses /sbin/shutdown as root; that works
-  as configured.
+## 9. Wayland session
 
-## 8. Optional: LXQt Wayland session (LXQt + labwc) from SDDM
+### 9.1 Not from SDDM
 
-This builds on your earlier notes (README-netbsd-lxqt-x11-wayland.md),
-where `startlxqtwayland` from ttyE1 worked. The X11 setup above stays the
-default; this only adds a second session you can pick in the greeter.
+Starting "LXQt (Wayland)" from SDDM does not work on NetBSD. The
+greeter's X server holds /dev/ttyE4 (VT 5), SDDM starts the Wayland
+session on the same VT, and seatd cannot open it:
 
-The greeter itself keeps running on X11 (`DisplayServer=x11`). SDDM can
-start a Wayland session from an X11 greeter; running the greeter on
-Wayland (weston kiosk) is experimental and not needed.
-
-Requirements are the same as for the manual Wayland start:
-`/dev/dri/card0` exists, `wscons=YES`, gettys on ttyE1-ttyE3 (you have
-these), labwc + lxqt-wayland-session installed. Note: labwc and xwayland
-are in the NetBSD 11 binary repo but not in the NetBSD 10.1 one
-(`pkgin install labwc` says "not available" there), so this section
-needs NetBSD 11. Building from source does not help either: the pkgsrc
-wlroots Makefile refuses NetBSD < 11 ("DRM_IOCTL_GET_UNIQUE is not allowed
-on render nodes"), and labwc and sway both depend on wlroots. Without labwc the session fails with
-`Could not start target: No such file or directory`.
-
-bash users: a login bash reads ~/.bash_profile and then NOT ~/.profile.
-If you have ~/.bash_profile, add `. ~/.profile` to it so the
-XDG_RUNTIME_DIR lines (8.2) are picked up.
-
-### 8.1 Checks first (please paste the output)
-
-```sh
-ls /usr/pkg/share/wayland-sessions/
-cat /usr/pkg/share/wayland-sessions/lxqt-wayland.desktop
-grep -n seatd "$(which startlxqtwayland)"
-ls -l /usr/pkg/bin/seatd /usr/pkg/bin/seatd-launch
-ls /usr/pkg/share/examples/rc.d/ | grep -i seat
-ls -l /dev/dri
+```
+Could not open terminal for VT 5: Device not configured
+Timeout waiting session to become active
+Failed to start a DRM session
 ```
 
-Results (netbsd10, 2026-10-24):
+On Linux, logind gives each session a fresh VT; SDDM has no equivalent
+on NetBSD, and no sddm.conf setting changes this. Hide the entry with
+`[Wayland] SessionDir=/nonexistent` (section 5) and start Wayland by
+hand as described below.
 
-- Session file: `lxqt-wayland.desktop`, `Exec=startlxqtwayland`.
-- `startlxqtwayland` runs the compositor via `seatd-launch`.
-- `/usr/pkg/bin/seatd-launch` is setuid root (`-r-s--x--x root`), so it
-  can start its own seatd as a normal user. No rc.d script for seatd
-  exists in pkgsrc, and none is needed.
-- `/dev/dri/card0` exists (root:wheel 0660; seatd opens it as root).
+### 9.2 Requirements
 
-### 8.2 XDG_RUNTIME_DIR
-
-SDDM only sets XDG_RUNTIME_DIR when logind exists, so on NetBSD it is
-unset. The wayland-session script sources ~/.profile for sh/ksh users,
-so the lines from your README are enough. In the desktop user's
-~/.profile:
+- NetBSD 11. wlroots (needed by labwc and sway) refuses to build on
+  older releases (pkgsrc wayland/wlroots: "DRM_IOCTL_GET_UNIQUE is not
+  allowed on render nodes"), and the NetBSD 10.1 binary repository has
+  no labwc, sway or xwayland.
+- A GPU with a DRM/KMS driver: `/dev/dri/card0` must exist.
+- Packages:
 
 ```sh
+pkgin install lxqt-wayland-session labwc xwayland
+```
+
+- The desktop user is in group `wheel`, and the DRM nodes are
+  read-write for the group:
+
+```sh
+id                       # must list 0(wheel)
+ls -l /dev/dri           # card0 and renderD* must be crw-rw----
+chmod 660 /dev/dri/card0 # if card0 shows crw-r-----
+```
+
+  With a read-only card0 labwc fails with `Failed to get DRM device:
+  Permission denied`.
+- seatd needs no setup. `startlxqtwayland` runs the compositor through
+  `/usr/pkg/bin/seatd-launch`, which is setuid root and starts a
+  private seatd for the session. pkgsrc ships no seatd rc.d script.
+
+### 9.3 Start script
+
+NetBSD has no logind, so XDG_RUNTIME_DIR must be created by the user.
+As the desktop user, create ~/wayland.sh:
+
+```sh
+#!/bin/sh
+
+tty                              # must be /dev/ttyE1..ttyE3
 export XDG_RUNTIME_DIR=/tmp/$(id -u)-runtime
 mkdir -p -m 700 $XDG_RUNTIME_DIR
+startlxqtwayland > $HOME/wayland.log 2>&1
 ```
-
-If your login shell is csh/tcsh, put the equivalent in ~/.login instead
-(the script sources that for csh).
-
-### 8.3 seatd
-
-Nothing to set up: `startlxqtwayland` calls the setuid `seatd-launch`,
-which starts a private seatd for the session, the same way as in your
-manual test.
-
-RESULT (NetBSD 11, 2026-10-24): does NOT work from SDDM. The greeter's
-X server runs on /dev/ttyE4 (Xorg.0.log: "Using wscons driver on
-/dev/ttyE4"). SDDM then starts the Wayland session on that same VT 5,
-seatd cannot open /dev/ttyE4 ("Could not open terminal for VT 5: Device
-not configured"), and labwc gives up after 10 s with "Failed to start a
-DRM session". SDDM on NetBSD has no way to give the session a fresh VT,
-and there is no sddm.conf setting for it.
-
-Working setup: SDDM for X11 (LXQt Desktop). For Wayland, log in on
-ttyE1 (Ctrl+Alt+F2) and run `startlxqtwayland`, as in your README.
-To hide the broken menu entry, in /usr/pkg/etc/sddm.conf:
-
-```ini
-[Wayland]
-SessionDir=/nonexistent
-```
-
-### 8.4 sddm.conf
-
-Nothing to change. The default `[Wayland] SessionDir` already includes
-/usr/pkg/share/wayland-sessions, which is why "LXQt (Wayland)" and labwc
-show up in the menu. For autologin into Wayland you would set:
-
-```ini
-[Autologin]
-User=<your user>
-Session=lxqt-wayland.desktop
-```
-
-### 8.5 Compositor choice
-
-On first start LXQt asks for the compositor; enter `labwc` as in your
-README. To preset it (UNSURE about the key name, the dialog is the safe
-way):
 
 ```sh
-mkdir -p ~/.config/lxqt
-printf '[General]\ncompositor=labwc\n' >> ~/.config/lxqt/session.conf
+chmod 755 ~/wayland.sh
 ```
 
-### 8.6 Test
+Switch to a virtual terminal (Ctrl+Alt+F2 for ttyE1), log in as the
+desktop user and run `~/wayland.sh`. Do not start it from constty, from
+inside X, or over ssh.
+
+On first start, `startlxqtwayland` finds no compositor in
+~/.config/lxqt/session.conf, starts labwc and opens the session
+settings; set the compositor to `labwc` there. The choice is saved, and
+the X11 window manager setting is not affected.
+
+## 10. Troubleshooting
+
+Logs:
+
+| Log | Content |
+|-----|---------|
+| /var/log/sddm.log | sddm daemon and greeter (manual run only) |
+| /var/log/Xorg.0.log | X server of the greeter / X11 session |
+| ~/.local/share/sddm/xorg-session.log | LXQt X11 session |
+| ~/.local/share/sddm/wayland-session.log | Wayland session started from SDDM |
+| ~/wayland.log | Wayland session started with wayland.sh |
+
+| Symptom | Cause / fix |
+|---------|-------------|
+| Greeter lists system users | Set `HideShells` (section 5) |
+| `/etc/rc.d/sddm stop` does nothing | Use `onestop` while `sddm=NO`; a hand-started sddm has no pidfile |
+| Session ends at once, grid and X cursor left on screen | Session program not found; check the session log |
+| `Could not start target: No such file or directory` | Compositor (labwc) not installed |
+| `Could not open terminal for VT N: Device not configured` | Wayland started from SDDM or constty; use ttyE1..ttyE3 (section 9) |
+| `socket file found at socket path /var/run/seatd.sock, refusing to start` | Stale socket from a failed run. If `pgrep -lf seatd` shows nothing: `rm /var/run/seatd.sock` (a reboot also clears it) |
+| `Failed to get DRM device: Permission denied`, `Could not initialize renderer` | DRM node permissions (section 9.2) |
+| `XDG_RUNTIME_DIR` errors | Variable unset or directory not mode 700 (section 9.3) |
+| `grep: /usr/share/X11/xkb/rules/base.lst: No such file or directory` | Harmless; to silence: `ln -s /usr/X11R7/lib/X11 /usr/share/X11` |
+| TERM is `dumb` or `unknown` on the console | Terminal type in /etc/ttys must be `wsvt25` |
+
+Harmless messages in a working Wayland session: `/dev/wskbd1..9` and
+`/dev/wsmouse1..9` "Device not configured" or "No such file" (wlroots
+probes all of them and uses the ones that exist), "tray plugin supports
+X11 only", xkbcomp keysym warnings, `org.freedesktop.portal.Desktop`
+not provided.
+
+## 11. Known limitations
+
+These come from the lack of logind on NetBSD:
+
+- The polkit authentication agent cannot register ("Cannot register
+  authentication agent"), because ConsoleKit has no record of the
+  session. GUI prompts for administrator actions do not appear.
+  Untested idea: start the session with `ck-launch-session` (from
+  ConsoleKit2), e.g. `ck-launch-session startlxqtwayland`, and check
+  with `ck-list-sessions`.
+- The LXQt power, suspend and hibernate buttons do nothing
+  (`org.freedesktop.login1` missing). Shut down from a terminal with
+  `shutdown -p now` (as root or via sudo).
+- Wayland sessions cannot be started from SDDM (section 9.1).
+
+## Setup script
+
+`sddm-setup.sh` performs steps 2 and 5 and checks the result. It never
+overwrites an existing file and never edits /etc/rc.conf. Run as root:
 
 ```sh
-/etc/rc.d/sddm onestart
+sh sddm-setup.sh
 ```
 
-Pick "LXQt (Wayland)", log in. If you get thrown back to the greeter:
-
-```sh
-less ~/.local/share/sddm/wayland-session.log   # session + labwc output
-less /var/log/sddm.log                         # only for manual runs
-```
-
-Typical errors and causes (same as in your README):
-
-- `XDG_RUNTIME_DIR` errors: 8.2 not picked up (wrong shell file).
-- `Failed to start a DRM session` / `Could not open terminal for VT`:
-  seatd could not get the VT from SDDM (see 8.3 UNSURE note).
-
-### 8.7 Manual Wayland start: issues seen on NetBSD 11 (2026-10-24)
-
-- `socket file found at socket path /var/run/seatd.sock, refusing to
-  start`: stale socket from a failed attempt. If `pgrep -lf seatd` shows
-  nothing, `sudo rm /var/run/seatd.sock` (a reboot also clears it).
-- `Failed to get DRM device: Permission denied` then `renderD0` /
-  `Could not initialize renderer`: /dev/dri/card0 was 0640. Fix:
-  `sudo chmod 660 /dev/dri/card0` (user must be in wheel).
-- Log the session: `startlxqtwayland > $HOME/wayland.log 2>&1`.
-
-Harmless messages once it runs: `/dev/wskbd1..9` and `/dev/wsmouse1..9`
-"Device not configured" / "No such file" (wlroots probes all, only the
-existing ones are used), tray plugin "X11 only", xkbcomp keysym warnings,
-portal not found.
-
-Known limits without logind/ConsoleKit sessions: the polkit agent cannot
-register (GUI admin prompts do not work), and the LXQt power, suspend
-and hibernate buttons do nothing (no org.freedesktop.login1). Shut down
-with `sudo shutdown -p now` from a terminal.
+It checks the requirements (stops without changes if one is missing),
+installs the example files that are not yet present, creates a minimal
+sddm.conf if none exists, restarts dbus if it installed the policy, and
+finally prints the relevant settings from rc.conf and sddm.conf with OK
+or WARN.

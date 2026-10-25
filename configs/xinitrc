@@ -1,0 +1,49 @@
+#!/bin/sh
+#
+# ~/.xinitrc for SLiM (login_cmd passes the chosen session as $1).
+# Matching line in /usr/pkg/etc/slim.conf:
+# sessions lxqt,xfce4,lxde,icewm,wmaker,blackbox,awesome,openbox,ctwm,twm
+
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+
+export XDG_DATA_DIRS="/usr/pkg/share:/usr/X11R7/share:/usr/share"
+export XDG_CONFIG_DIRS="/usr/pkg/etc/xdg:/etc/xdg"
+export XDG_RUNTIME_DIR="/tmp/runtime-$(id -u)"
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR"
+
+DEFAULT_SESSION=twm
+
+case "$1" in
+lxqt)
+	exec dbus-run-session -- startlxqt
+	;;
+xfce4)
+	exec startxfce4
+	;;
+lxde)
+	exec dbus-run-session -- startlxde
+	;;
+icewm)
+	exec icewm-session
+	;;
+wmaker)
+	exec wmaker
+	;;
+blackbox)
+	exec blackbox
+	;;
+awesome)
+	exec awesome
+	;;
+openbox)
+	exec openbox-session
+	;;
+ctwm)
+	exec ctwm
+	;;
+*)
+	exec "$DEFAULT_SESSION"
+	;;
+esac

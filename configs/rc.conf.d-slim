@@ -1,0 +1,14 @@
+# /etc/rc.conf.d/slim
+# Re-attach the keyboard to the keyboard mux (wsmux 1) before SLiM
+# starts. A Wayland session (labwc/seatd) leaves wskbd0 detached, and
+# X then gets garbage keyboard input.
+
+slim_fixkbd()
+{
+	if ! wsmuxctl -f 1 -l | grep -q '^wskbd0$'; then
+		echo "Re-attaching wskbd0 to wsmux1."
+		wsmuxctl -f 1 -a wskbd0
+	fi
+	return 0
+}
+start_precmd=slim_fixkbd

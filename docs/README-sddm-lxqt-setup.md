@@ -302,12 +302,13 @@ Details (NetBSD 11.0, sddm 0.21.0, seatd 0.9.3):
   seatd maps VT N to /dev/ttyEN instead of /dev/ttyE(N-1)
   (`get_tty_path()` in seatd common/terminal.c), so it opens
   /dev/ttyE6.
-- Adding screen 6 as well lets the session start, but the kernel then
-  panicked ("fatal breakpoint trap in supervisor mode") when a browser
-  was started (backtrace: breakpoint, wskbd_translate, wskbd_input,
-  i.e. while handling a key press). The wscons configuration itself is valid (wsconscfg(8):
-  up to 8 screens, 0 to 7), so this is most likely a kernel bug
-  triggered by the VT mismatch. The exact configuration is in 9.5;
+- Adding screen 6 as well lets the session start, but the system then
+  dropped into the kernel debugger ("fatal breakpoint trap in
+  supervisor mode", backtrace: breakpoint, wskbd_translate,
+  wskbd_input). This is the Ctrl+Alt+Esc debugger hotkey, fired
+  because the keyboard state is stuck after the Wayland session; it is
+  not a crash (type `c` at db> to continue, or set
+  `ddb.fromconsole=0` in /etc/sysctl.conf). The exact configuration is in 9.5;
   do not use it for daily work.
 
 ### 9.2 Requirements
@@ -365,6 +366,17 @@ On first start, `startlxqtwayland` finds no compositor in
 settings; set the compositor to `labwc` there. The choice is saved, and
 the X11 window manager setting is not affected.
 
+After the Wayland session ends, the keyboard is left detached from the
+keyboard mux, and the next X server (SDDM or SLiM) gets garbage input.
+Before starting X again, as root:
+
+```sh
+wsmuxctl -f 1 -l              # empty = detached
+wsmuxctl -f 1 -a wskbd0       # re-attach
+```
+
+Details in slim/slim-sessions.md, section 1.1.
+
 ### 9.4 How seatd is started
 
 seatd has no configuration file and needs no rc.d service for this
@@ -395,8 +407,11 @@ See seatd(1), seatd-launch(1) and labwc(1).
 
 ### 9.5 Experimental: Wayland session from SDDM
 
-WARNING: this setup lets SDDM start "LXQt (Wayland)", but the kernel
-panicked with it on NetBSD 11.0 when typing in a browser (section 9.1).
+Note: these extra screens also make SLiM freeze the machine (see
+slim/slim-sessions.md, section 2). Remove them after testing.
+
+WARNING: this setup lets SDDM start "LXQt (Wayland)", but the keyboard
+got stuck and dropped into the kernel debugger (section 9.1).
 Use it only for testing, and keep the manual start (9.3) for daily use.
 
 /etc/wscons.conf creates two extra screens:
